@@ -21,7 +21,7 @@ parser = Options <$> filenameParser
 
 main :: IO ()
 main = do
-  Options{..} <- T.options "Runs brisk benchmarks" parser
+  Options{..} <- T.options "Parse verilog file" parser
   testBool <- T.testfile filename
   when (not testBool) $ die "verilog file does not exist"
 

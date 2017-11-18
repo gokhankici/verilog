@@ -179,9 +179,11 @@ ModuleItems :: { [ModuleItem] }
 ModuleItem :: { ModuleItem }
 : "parameter"  MaybeRange Identifier "=" Expr ";"       { Parameter  $2 $3 $5 }
 | "localparam" MaybeRange Identifier "=" Expr ";"       { Localparam $2 $3 $5 }
-| "input"  MaybeRange Identifiers ";"                   { Input  $2 $3 }
-| "output" MaybeRange Identifiers ";"                   { Output $2 $3 }
+| "input"         MaybeRange Identifiers ";"            { Input  $2 $3 }
+| "input"  "wire" MaybeRange Identifiers ";"            { Input  $3 $4 }
+| "output" MaybeDataType MaybeRange Identifiers ";"     { Output $2 $3 $4 }
 | "inout"  MaybeRange Identifiers ";"                   { Inout  $2 $3 }
+| "inout"  "wire" MaybeRange Identifiers ";"            { Inout  $3 $4 }
 | "reg"    MaybeRange RegDeclarations ";"               { Reg    $2 $3 }
 | "wire"   MaybeRange WireDeclarations ";"              { Wire   $2 $3 }
 | "integer" Identifiers ";"                             { Integer $2 }
@@ -213,6 +215,11 @@ MaybeRange :: { Maybe Range }
 
 Range :: { Range }
 : "[" Expr ":" Expr "]"  { ($2, $4) }
+
+MaybeDataType :: { Maybe DataType }
+:         { Nothing }
+| "wire"  { Just WireType }
+| "reg"   { Just RegType }
 
 LHS :: { LHS }
 : Identifier              { LHS       $1    }

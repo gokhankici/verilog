@@ -9,6 +9,7 @@ module Language.Verilog.AST
   , BinOp      (..)
   , Sense      (..)
   , Call       (..)
+  , DataType   (..)
   , PortBinding
   , Case
   , Range
@@ -18,26 +19,22 @@ import Data.Bits
 import Data.List
 import Data.Maybe
 import Text.Printf
-
 import Data.BitVec
 
 type Identifier = String
 
-data Module = Module Identifier [Identifier] [ModuleItem] deriving Eq
+data Module = Module Identifier [Identifier] [ModuleItem]
+            deriving Eq
 
-instance Show Module where
-  show (Module name ports items) = unlines
-    [ "module " ++ name ++ (if null ports then "" else "(" ++ commas ports ++ ")") ++ ";"
-    , unlines' $ map show items
-    , "endmodule"
-    ]
+data DataType = WireType | RegType
+              deriving (Eq)
 
 data ModuleItem
   = Comment    String
   | Parameter  (Maybe Range) Identifier Expr
   | Localparam (Maybe Range) Identifier Expr
   | Input      (Maybe Range) [Identifier]
-  | Output     (Maybe Range) [Identifier]
+  | Output     (Maybe DataType) (Maybe Range) [Identifier]
   | Inout      (Maybe Range) [Identifier]
   | Wire       (Maybe Range) [(Identifier, Maybe Expr)]
   | Reg        (Maybe Range) [(Identifier, Maybe Range)]
@@ -49,47 +46,6 @@ data ModuleItem
   deriving Eq
 
 type PortBinding = (Identifier, Maybe Expr)
-
-instance Show ModuleItem where
-  show a = case a of
-    Comment    a     -> "// " ++ a
-    Parameter  r n e -> printf "parameter %s%s = %s;"  (showRange r) n (showExprConst e)
-    Localparam r n e -> printf "localparam %s%s = %s;" (showRange r) n (showExprConst e)
-    Input      r a   -> printf "input  %s%s;" (showRange r) (commas a)
-    Output     r a   -> printf "output %s%s;" (showRange r) (commas a)
-    Inout      r a   -> printf "inout  %s%s;" (showRange r) (commas a)
-    Wire       r a   -> printf "wire   %s%s;" (showRange r) (commas [ a ++ showAssign r | (a, r) <- a ])
-    Reg        r a   -> printf "reg    %s%s;" (showRange r) (commas [ a ++ showRange  r | (a, r) <- a ])
-    Integer      a   -> printf "integer %s;"  $ commas a
-    Initial    a     -> printf "initial\n%s" $ indent $ show a
-    Always     Nothing  b -> printf "always\n%s" $ indent $ show b
-    Always     (Just a) b -> printf "always @(%s)\n%s" (show a) $ indent $ show b
-    Assign     a b   -> printf "assign %s = %s;" (show a) (show b)
-    Instance   m params i ports
-      | null params -> printf "%s %s %s;"     m                                  i (showPorts show ports)
-      | otherwise   -> printf "%s #%s %s %s;" m (showPorts showExprConst params) i (showPorts show ports)
-    where
-    showPorts :: (Expr -> String) -> [(Identifier, Maybe Expr)] -> String
-    showPorts s ports = printf "(%s)" $ commas [ printf ".%s(%s)" i (if isJust arg then s $ fromJust arg else "") | (i, arg) <- ports ]
-    showAssign :: Maybe Expr -> String
-    showAssign a = case a of
-      Nothing -> ""
-      Just a -> printf " = %s" $ show a
-  
-showRange :: Maybe Range -> String
-showRange Nothing = ""
-showRange (Just (h, l)) = printf "[%s:%s] " (showExprConst h) (showExprConst l)
-
-indent :: String -> String
-indent a = '\t' : f a
-  where
-  f [] = []
-  f (a : rest)
-    | a == '\n' = "\n\t" ++ f rest
-    | otherwise = a : f rest
-
-unlines' :: [String] -> String
-unlines' = intercalate "\n"
 
 data Expr
   = String     String
@@ -107,14 +63,8 @@ data Expr
   | Bit        Expr Int
   deriving Eq
 
-data UniOp = Not | BWNot | UAdd | USub deriving Eq
-
-instance Show UniOp where
-  show a = case a of
-    Not   -> "!"
-    BWNot -> "~"
-    UAdd  -> "+"
-    USub  -> "-"
+data UniOp = Not | BWNot | UAdd | USub
+           deriving Eq
 
 data BinOp
   = And   
@@ -136,6 +86,91 @@ data BinOp
   | Gt    
   | Ge    
   deriving Eq
+
+data LHS
+  = LHS       Identifier
+  | LHSBit    Identifier Expr
+  | LHSRange  Identifier Range
+  | LHSConcat [LHS]
+  deriving Eq
+
+type Case = ([Expr], Stmt)
+
+data Call = Call Identifier [Expr]
+          deriving Eq
+
+data Sense
+  = Sense        LHS
+  | SenseOr      Sense Sense
+  | SensePosedge LHS
+  | SenseNegedge LHS
+  deriving Eq
+
+type Range = (Expr, Expr)
+
+-- #############################################################################  
+-- #############################################################################  
+-- #############################################################################  
+
+instance Show Module where
+  show (Module name ports items) = unlines
+    [ "module " ++ name ++ (if null ports then "" else "(" ++ commas ports ++ ")") ++ ";"
+    , unlines' $ map show items
+    , "endmodule"
+    ]
+
+instance Show DataType where
+  show WireType = "wire"
+  show RegType  = "reg"
+
+instance Show ModuleItem where
+  show x = case x of
+    Comment    a     -> "// " ++ a
+    Parameter  r n e -> printf "parameter %s%s = %s;"  (showRange r) n (showExprConst e)
+    Localparam r n e -> printf "localparam %s%s = %s;" (showRange r) n (showExprConst e)
+    Input      r a   -> printf "input  %s%s;" (showRange r) (commas a)
+    Output     d r a -> printf "output %s%s%s;" (maybe "" show d) (showRange r) (commas a)
+    Inout      r a   -> printf "inout  %s%s;" (showRange r) (commas a)
+    Wire       r as  -> printf "wire   %s%s;" (showRange r) (commas [ a ++ showAssign r' | (a, r') <- as ])
+    Reg        r as  -> printf "reg    %s%s;" (showRange r) (commas [ a ++ showRange  r' | (a, r') <- as ])
+    Integer      a   -> printf "integer %s;"  $ commas a
+    Initial    a     -> printf "initial\n%s" $ indent $ show a
+    Always     Nothing  b -> printf "always\n%s" $ indent $ show b
+    Always     (Just a) b -> printf "always @(%s)\n%s" (show a) $ indent $ show b
+    Assign     a b   -> printf "assign %s = %s;" (show a) (show b)
+    Instance   m params i ports
+      | null params -> printf "%s %s %s;"     m                                  i (showPorts show ports)
+      | otherwise   -> printf "%s #%s %s %s;" m (showPorts showExprConst params) i (showPorts show ports)
+    where
+    showPorts :: (Expr -> String) -> [(Identifier, Maybe Expr)] -> String
+    showPorts s ports = printf "(%s)" $ commas [ printf ".%s(%s)" i (if isJust arg then s $ fromJust arg else "") | (i, arg) <- ports ]
+    showAssign :: Maybe Expr -> String
+    showAssign a = case a of
+                     Nothing -> ""
+                     Just y -> printf " = %s" $ show y
+  
+showRange :: Maybe Range -> String
+showRange Nothing = ""
+showRange (Just (h, l)) = printf "[%s:%s] " (showExprConst h) (showExprConst l)
+
+indent :: String -> String
+indent a = '\t' : f a
+  where
+  f [] = []
+  f (a : rest)
+    | a == '\n' = "\n\t" ++ f rest
+    | otherwise = a : f rest
+
+unlines' :: [String] -> String
+unlines' = intercalate "\n"
+
+
+instance Show UniOp where
+  show a = case a of
+    Not   -> "!"
+    BWNot -> "~"
+    UAdd  -> "+"
+    USub  -> "-"
 
 instance Show BinOp where
   show a = case a of
@@ -216,13 +251,6 @@ instance Monoid Expr where
   mappend a b = mconcat [a, b]
   mconcat     = Concat
 
-data LHS
-  = LHS       Identifier
-  | LHSBit    Identifier Expr
-  | LHSRange  Identifier Range
-  | LHSConcat [LHS]
-  deriving Eq
-
 instance Show LHS where
   show a = case a of
     LHS        a        -> a
@@ -264,22 +292,12 @@ instance Show Stmt where
     Delay                 a b               -> printf "#%s %s" (showExprConst a) (show b)
     Null                                    -> ";"
 
-type Case = ([Expr], Stmt)
 
 showCase :: Case -> String
 showCase (a, b) = printf "%s:\n%s" (commas $ map show a) (indent $ show b)
 
-data Call = Call Identifier [Expr] deriving Eq
-
 instance Show Call where
   show (Call a b) = printf "%s(%s)" a (commas $ map show b)
-
-data Sense
-  = Sense        LHS
-  | SenseOr      Sense Sense
-  | SensePosedge LHS
-  | SenseNegedge LHS
-  deriving Eq
 
 instance Show Sense where
   show a = case a of
@@ -288,5 +306,4 @@ instance Show Sense where
     SensePosedge a   -> printf "posedge %s" (show a)
     SenseNegedge a   -> printf "negedge %s" (show a)
 
-type Range = (Expr, Expr)
 
